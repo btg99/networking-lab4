@@ -1,8 +1,8 @@
 use rand::{thread_rng, Fill};
 use socket2::{Domain, Protocol, Socket, Type};
+use stats::stddev;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
-use stats::stddev;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
@@ -13,7 +13,7 @@ struct Options {
     #[structopt(short = "w", default_value = "2")]
     timeout: u64,
     #[structopt(short = "c")]
-    max_transmitted: Option<usize>
+    max_transmitted: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,12 +130,18 @@ fn echo_message<'a>(identifier: u16, sequence_number: u16, data: &'a [u8]) -> IC
     msg
 }
 
-fn send_echo_request(identifier: u16, sequence_number: u16, packet_size: usize, socket: &Socket) {
+fn send_echo_request(
+    identifier: u16,
+    sequence_number: u16,
+    packet_size: usize,
+    socket: &Socket,
+) -> Vec<u8> {
     let mut data = vec![0u8; packet_size];
     data.try_fill(&mut thread_rng())
         .expect("Could not generate random data for packet.");
     let msg = echo_message(identifier, sequence_number, &data);
     socket.send(&msg.as_bytes()).ok();
+    data
 }
 
 fn extract_icmp_message<'a>(bytes: &'a [u8]) -> Option<&'a [u8]> {
@@ -155,12 +161,20 @@ fn extract_ttl(bytes: &[u8]) -> u8 {
     bytes[8]
 }
 
-fn receive_echo_reply<'a>(buffer: &'a mut [u8], socket: &Socket) -> Option<(ICMPMessage<'a>, u8)> {
+fn receive_echo_reply<'a>(
+    buffer: &'a mut [u8],
+    data_sent: &[u8],
+    socket: &Socket,
+) -> Option<(ICMPMessage<'a>, u8)> {
     let length = socket.recv(buffer).ok()?;
     let bytes = extract_icmp_message(&buffer[..length])?;
     let ttl = extract_ttl(bytes);
     let msg = ICMPMessage::try_from_bytes(bytes)?;
-    Some((msg, ttl))
+    if msg.checksum == compute_checksum(&msg) && msg.data == data_sent {
+        Some((msg, ttl))
+    } else {
+        None
+    }
 }
 
 fn display_frac_millis(duration: &Duration) -> String {
@@ -183,9 +197,10 @@ fn ping_address(
 
     while !done(transmissions.len(), max_transmitted) {
         let timer = Instant::now();
-        send_echo_request(identifier, transmissions.len() as u16, packet_size, &socket);
+        let data_sent =
+            send_echo_request(identifier, transmissions.len() as u16, packet_size, &socket);
         let mut buffer = vec![0; 1024];
-        if let Some((reply, ttl)) = receive_echo_reply(&mut buffer, &socket) {
+        if let Some((reply, ttl)) = receive_echo_reply(&mut buffer, &data_sent, &socket) {
             let elapsed = timer.elapsed();
 
             println!(
@@ -234,8 +249,11 @@ fn print_stats(transmissions: Vec<Transmission>, time: Duration) {
         .max()
         .unwrap_or_default();
 
-    let rtt_mdev: Duration = Duration::from_nanos(
-        stddev(transmissions.iter().map(|t| t.round_trip_time.as_nanos() as f64)) as u64);
+    let rtt_mdev: Duration = Duration::from_nanos(stddev(
+        transmissions
+            .iter()
+            .map(|t| t.round_trip_time.as_nanos() as f64),
+    ) as u64);
 
     println!(
         "{} packets transmitted, {} received, {:.0}% packet loss, time {}ms",
