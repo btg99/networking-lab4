@@ -154,7 +154,7 @@ fn display_frac_millis(duration: &Duration) -> String {
     format!(
         "{}.{:0<3.3}",
         duration.as_millis(),
-        duration.subsec_millis().to_string()
+        (duration.as_micros() % 1000).to_string()
     )
 }
 
@@ -209,6 +209,7 @@ fn print_stats(transmissions: Vec<Transmission>, time: Duration) {
         .map(|t| t.round_trip_time)
         .min()
         .unwrap_or_default();
+
     let rtt_avg: Duration = transmissions
         .iter()
         .map(|t| t.round_trip_time)
