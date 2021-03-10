@@ -2,6 +2,19 @@ use rand::{thread_rng, Fill};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
+use stats::stddev;
+use structopt::StructOpt;
+
+#[derive(StructOpt)]
+struct Options {
+    hostname: String,
+    #[structopt(short = "s", default_value = "56")]
+    packet_size: usize,
+    #[structopt(short = "w", default_value = "2")]
+    timeout: u64,
+    #[structopt(short = "c")]
+    max_transmitted: Option<usize>
+}
 
 #[derive(Clone, Debug)]
 struct ICMPMessage<'a> {
@@ -220,15 +233,9 @@ fn print_stats(transmissions: Vec<Transmission>, time: Duration) {
         .map(|t| t.round_trip_time)
         .max()
         .unwrap_or_default();
-    let rtt_mdev: Duration = Duration::from_nanos(f64::sqrt(
-        transmissions
-            .iter()
-            .map(|t| t.round_trip_time.as_nanos() as f64)
-            .map(|x| x - rtt_avg.as_nanos() as f64)
-            .map(|x| x * x)
-            .sum::<f64>()
-            / length as f64,
-    ) as u64);
+
+    let rtt_mdev: Duration = Duration::from_nanos(
+        stddev(transmissions.iter().map(|t| t.round_trip_time.as_nanos() as f64)) as u64);
 
     println!(
         "{} packets transmitted, {} received, {:.0}% packet loss, time {}ms",
@@ -247,13 +254,14 @@ fn print_stats(transmissions: Vec<Transmission>, time: Duration) {
 }
 
 fn main() {
-    let hostname = "google.com";
-    let packet_size = 56;
+    let options = Options::from_args();
+    let hostname = options.hostname;
+    let packet_size = options.packet_size;
     let estimated_total_size = packet_size + 28;
-    let timeout = Duration::from_secs(1);
-    let max_transmitted = Some(4);
+    let timeout = Duration::from_secs(options.timeout);
+    let max_transmitted = options.max_transmitted;
 
-    if let Some(address) = resolve_hostname(hostname) {
+    if let Some(address) = resolve_hostname(&hostname) {
         println!(
             "PING {} ({}) {}({}) bytes of data.",
             hostname,
@@ -269,17 +277,4 @@ fn main() {
     } else {
         eprintln!("Hostname resolution failed for {}.", hostname);
     }
-
-    /*
-    let data = [0, 1, 2, 3];
-    let identifier = 15;
-    let msg = echo_message(identifier, 5, &data);
-    println!("Sent: {:?}", msg);
-
-
-    socket.send(&msg.as_bytes()).unwrap();
-    let mut buffer = vec![0; 1024];
-    let length = socket.recv(&mut buffer).unwrap();
-    let message = extract_icmp_message(&buffer[..length]).unwrap();
-    println!("Got: {:?}", ICMPMessage::from_bytes(message)); */
 }
